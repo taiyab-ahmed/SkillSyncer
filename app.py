@@ -15,15 +15,19 @@ except ImportError:
     canvas = None
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
-DB_PATH = os.path.join(BASE_DIR, "resume_analyzer.db")
-RULES_PATH = os.path.join(BASE_DIR, "job_rules.json")
+# On Vercel only /tmp is writable (and it is temporary), so data files go there.
+DATA_DIR = "/tmp" if os.environ.get("VERCEL") else BASE_DIR
+UPLOAD_FOLDER = os.path.join(DATA_DIR, "uploads")
+DB_PATH = os.path.join(DATA_DIR, "resume_analyzer.db")
+RULES_PATH = os.path.join(DATA_DIR, "job_rules.json")
+BUNDLED_RULES_PATH = os.path.join(BASE_DIR, "job_rules.json")  # shipped with the code
+MAX_UPLOAD_MB = 4  # Vercel rejects request bodies above 4.5 MB
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-this-secret-key-before-sharing")
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 
 SKILL_LIST = sorted({
     "python", "flask", "django", "sql", "git", "api", "java", "spring", "hibernate",
@@ -48,13 +52,14 @@ DEFAULT_RULES = {
 }
 
 def load_rules():
-    try:
-        with open(RULES_PATH, encoding="utf-8") as f:
-            rules = json.load(f)
-        if isinstance(rules, dict) and rules:
-            return rules
-    except (OSError, ValueError):
-        pass
+    for path in (RULES_PATH, BUNDLED_RULES_PATH):
+        try:
+            with open(path, encoding="utf-8") as f:
+                rules = json.load(f)
+            if isinstance(rules, dict) and rules:
+                return rules
+        except (OSError, ValueError):
+            pass
     return DEFAULT_RULES
 
 def split_list(value):
@@ -381,8 +386,9 @@ def bulk_screen():
 
 @app.errorhandler(413)
 def too_large(error):
-    return jsonify({"error": True, "messages": ["Upload exceeds the 8 MB limit."]}), 413
+    return jsonify({"error": True, "messages": [f"Upload exceeds the {MAX_UPLOAD_MB} MB limit."]}), 413
+
+init_db()  # also runs on Vercel, where the app is imported instead of started
 
 if __name__ == "__main__":
-    init_db()
     app.run(debug=True, host="127.0.0.1", port=5000)

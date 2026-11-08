@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 const form = $("candidate-form"), submitBtn = $("submit-btn"), resumeInput = $("resume"), fileNameEl = $("file-name");
-const MAX_BYTES = 8 * 1024 * 1024;
+const MAX_BYTES = 4 * 1024 * 1024;
 
 function setState(state) {
   $("output-empty").hidden = state !== "empty";
@@ -50,9 +50,9 @@ function renderResult(data) {
 }
 resumeInput.addEventListener("change", () => {
   const file = resumeInput.files[0];
-  if (!file) { fileNameEl.textContent = "No file chosen · PDF, max 8 MB"; return; }
+  if (!file) { fileNameEl.textContent = "No file chosen · PDF, max 4 MB"; return; }
   if (!file.name.toLowerCase().endsWith(".pdf")) { alert("Please choose a PDF file."); resumeInput.value = ""; fileNameEl.textContent = "No file chosen"; return; }
-  if (file.size > MAX_BYTES) { alert("PDF must be 8 MB or smaller."); resumeInput.value = ""; fileNameEl.textContent = "No file chosen"; return; }
+  if (file.size > MAX_BYTES) { alert("PDF must be 4 MB or smaller."); resumeInput.value = ""; fileNameEl.textContent = "No file chosen"; return; }
   fileNameEl.textContent = file.name;
 });
 const dropZone = $("drop-zone");
