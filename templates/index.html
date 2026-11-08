@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Resume Analyzer</title><link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}"></head>
+<body><div class="app">
+<header class="topbar">
+  <div><h1>Resume Analyzer</h1><p>Choose the job role, enter the candidate's experience, degree and location, then upload the resume PDF to check it against that role's rules.</p></div>
+  <div class="top-actions"><button class="utility-btn" id="theme-toggle" type="button">Dark mode</button><a class="utility-btn" href="{{ url_for('admin_login') }}">HR / Admin</a></div>
+</header>
+{% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}
+<div class="layout">
+<form id="candidate-form" class="panel" enctype="multipart/form-data">
+  <h2>Candidate details</h2>
+  <label class="field"><span class="field__label">Job role</span><select name="role" id="role" required><option value="">Select a role</option>{% for r in roles %}<option>{{ r }}</option>{% endfor %}</select></label>
+  <div class="row">
+    <label class="field"><span class="field__label">Experience (years)</span><input type="number" name="experience" id="experience" min="0" max="60" step="0.5" required placeholder="e.g. 4.5"></label>
+    <label class="field"><span class="field__label">Bachelor's degree</span><select name="degree" id="degree" required><option value="">Select</option><option value="4">Yes, 4-year (B.E / B.Tech)</option><option value="3">Yes, 3-year (B.Sc / BCA / B.Com)</option><option value="0">No bachelor's degree</option></select></label>
+  </div>
+  <label class="field"><span class="field__label">Location</span><input type="text" name="location" id="location" required placeholder="e.g. Bengaluru"></label>
+  <div class="row">
+    <label class="field"><span class="field__label">Expected salary <i>(optional)</i></span><input name="salary" placeholder="e.g. 5 LPA"></label>
+    <label class="field"><span class="field__label">Notice period <i>(optional)</i></span><select name="notice"><option value="">Select</option><option>Immediate</option><option>15 days</option><option>30 days</option><option>60 days</option><option>90 days</option></select></label>
+  </div>
+  <label class="field field--file" id="drop-zone"><strong>Drop the resume PDF here or click to browse</strong><input type="file" name="resume" id="resume" accept=".pdf,application/pdf" required><span class="field__filename" id="file-name">No file chosen · PDF, max 8 MB</span></label>
+  <button type="submit" class="btn" id="submit-btn">Analyze resume</button>
+  <p class="privacy-note">Screening is automated and is not a hiring decision.</p>
+</form>
+<section class="panel" id="output" aria-live="polite">
+  <h2>Result</h2>
+  <div class="output__empty" id="output-empty"><div class="output__empty-mark">＋</div><p>The result will appear here after you analyze a resume.</p></div>
+  <div class="output__loading" id="output-loading" hidden><div class="spinner"></div><p>Reading the resume and checking the rules…</p></div>
+  <div class="result" id="result" hidden>
+    <div class="result__band" id="result-band"><span class="result__status" id="result-status"></span><span class="result__sub" id="result-sub"></span></div>
+    <ul class="result__checklist" id="result-checklist"></ul>
+    <div class="skills-block"><h3>Skills found in resume</h3><div id="extracted-skills" class="chips"></div></div>
+    <div class="result__reasons" id="result-reasons"></div>
+    <div class="result-actions"><a class="btn secondary-btn" href="{{ url_for('report') }}" target="_blank">Download PDF report</a><a class="utility-btn" href="{{ url_for('index') }}">New analysis</a></div>
+  </div>
+</section></div>
+<footer class="scanner__footer">Rules for each role are managed by HR under Job rules</footer></div>
+<script src="{{ url_for('static', filename='js/script.js') }}"></script></body></html>

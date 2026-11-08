@@ -1,0 +1,54 @@
+{
+  "Python Developer": {
+    "min_years_experience": 4,
+    "required_skills": [
+      "python"
+    ],
+    "require_bachelor_degree": true,
+    "min_degree_years": 4,
+    "allowed_locations": [
+      "bangalore",
+      "bengaluru"
+    ]
+  },
+  "Java Developer": {
+    "min_years_experience": 2,
+    "required_skills": [
+      "java"
+    ],
+    "require_bachelor_degree": true,
+    "min_degree_years": 3,
+    "allowed_locations": []
+  },
+  "Web Developer": {
+    "min_years_experience": 2,
+    "required_skills": [
+      "html",
+      "css",
+      "javascript"
+    ],
+    "require_bachelor_degree": true,
+    "min_degree_years": 3,
+    "allowed_locations": []
+  },
+  "Data Analyst": {
+    "min_years_experience": 2,
+    "required_skills": [
+      "sql",
+      "excel"
+    ],
+    "require_bachelor_degree": true,
+    "min_degree_years": 3,
+    "allowed_locations": []
+  },
+  "Machine Learning Engineer": {
+    "min_years_experience": 2,
+    "required_skills": [
+      "python",
+      "machine learning"
+    ],
+    "require_bachelor_degree": true,
+    "min_degree_years": 3,
+    "allowed_locations": []
+  }
+}
