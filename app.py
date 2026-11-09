@@ -34,7 +34,7 @@ SKILL_LIST = sorted({
     "rest api", "html", "css", "javascript", "react", "responsive design", "excel",
     "power bi", "tableau", "statistics", "machine learning", "pandas", "numpy",
     "scikit-learn", "tensorflow", "opencv", "computer vision", "pytorch", "yolo",
-    "deep learning", "c", "c++", "mongodb", "mysql", "postgresql", "aws", "azure",
+    "deep learning", "c++", "mongodb", "mysql", "postgresql", "aws", "azure",
     "docker", "kubernetes", "communication", "leadership", "problem solving",
     "spacy", "nlp", "transformers", "streamlit", "linux",
 })
@@ -166,6 +166,47 @@ def extract_resume_data(filepath):
             "has_bachelor_degree": has_bachelor, "degree_years": degree_years,
             "skills": skills}
 
+SECTION_GROUPS = {
+    "education": r"education|qualifications?|academics?",
+    "experience": r"experience|employment|internships?|work history",
+    "skills": r"skills|technical skills|core competencies",
+    "projects": r"projects?",
+    "summary": r"summary|objective|profile|about me",
+    "certifications": r"certifications?|achievements|awards",
+}
+OTHER_DOCUMENT_HINTS = [  # phrases that show up in job posts, invoices, papers, books etc., not in resumes
+    "job description", "we are looking for", "about the company", "about us", "how to apply", "apply now",
+    "invoice", "bill to", "purchase order", "terms and conditions", "table of contents", "abstract",
+    "this certificate is awarded", "certificate of completion", "dear sir", "glossary",
+]
+PHONE_PATTERNS = [r"(?<!\d)\d{10}(?!\d)", r"(?<!\d)\d{5}[\s-]\d{5}(?!\d)", r"\+\d{1,3}[\s-]?\d{4,5}[\s-]?\d{4,6}",
+                  r"\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}"]
+
+def resume_check(text):
+    """Returns (is_resume, reason). Every rule must pass, so non-resume PDFs are rejected."""
+    words = len(text.split())
+    if words < 40:
+        return False, "it has almost no text"
+    if words > 4000:
+        return False, "it is too long to be a resume"
+    lower = text.lower()
+    for hint in OTHER_DOCUMENT_HINTS:
+        if hint in lower:
+            return False, f'it looks like a different kind of document (contains "{hint}")'
+    has_email = re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", text)
+    has_phone = any(re.search(p, text) for p in PHONE_PATTERNS)
+    if not (has_email or has_phone):
+        return False, "no email address or phone number was found"
+    sections = [k for k, pat in SECTION_GROUPS.items() if re.search(r"(?<![A-Za-z])(?:" + pat + r")(?![A-Za-z])", text, re.IGNORECASE)]
+    if len(sections) < 2:
+        return False, "no resume sections such as Education, Experience or Skills were found"
+    if not re.search(r"(?<!\d)(19|20)\d{2}(?!\d)", text):
+        return False, "no years or dates were found"
+    return True, ""
+
+def not_resume_message(reason):
+    return f"This PDF is not a resume: {reason}. Please upload only a resume PDF."
+
 def has_skill(text, skill):
     return re.search(r"(?<!\w)" + re.escape(skill) + r"(?!\w)", text, re.IGNORECASE) is not None
 
@@ -261,7 +302,12 @@ def analyze():
     try:
         extracted = extract_resume_data(filepath)
         if not extracted["raw_text"]:
-            return jsonify({"error": True, "messages": ["No selectable text was found. This may be a scanned PDF; OCR is not enabled."]}), 400
+            os.remove(filepath)
+            return jsonify({"error": True, "messages": ["No selectable text was found. Scanned or image-only PDFs are not supported. Please upload a text-based resume PDF."]}), 400
+        is_resume, reason = resume_check(extracted["raw_text"])
+        if not is_resume:
+            os.remove(filepath)
+            return jsonify({"error": True, "messages": [not_resume_message(reason)]}), 400
         degree_years = int(f["degree"])
         profile = {"years_experience": years, "has_bachelor_degree": degree_years > 0,
                    "degree_years": degree_years, "location": f["location"]}
@@ -373,6 +419,9 @@ def bulk_screen():
                     extracted = extract_resume_data(path)
                     if not extracted["raw_text"]:
                         raise ValueError("No selectable text (scanned PDF/OCR not enabled)")
+                    is_resume, reason = resume_check(extracted["raw_text"])
+                    if not is_resume:
+                        raise ValueError("not a resume: " + reason)
                     profile = {"years_experience": extracted["years_experience"], "has_bachelor_degree": extracted["has_bachelor_degree"],
                                "degree_years": extracted["degree_years"], "location": ""}
                     passed, reasons, _ = match_criteria(profile, extracted["raw_text"], rules[role])
