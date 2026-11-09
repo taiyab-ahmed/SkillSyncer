@@ -31,11 +31,26 @@ If PowerShell blocks activation, run:
 
 Then open `http://127.0.0.1:5000`.
 
-## Admin demo login
-- Username: `admin`
-- Password: `change-me`
+## Admin login (no password is stored in the code)
+The HR / Admin username and password are read from environment variables, so they never appear in the code or on GitHub:
 
-These demo credentials are not safe for public deployment. Before sharing, set environment variables `ADMIN_USER`, `ADMIN_PASSWORD`, and `SECRET_KEY`. Do not expose Flask debug mode publicly.
+- `ADMIN_USER` - HR username
+- `ADMIN_PASSWORD` - HR password
+- `SECRET_KEY` - long random text that protects login sessions
+
+If `ADMIN_USER` or `ADMIN_PASSWORD` is missing, admin login stays disabled.
+
+**On Vercel:** Project > Settings > Environment Variables, then redeploy.
+
+**On your computer:** create a file named `.env` next to `app.py` (it is git-ignored, so it is never uploaded):
+```
+ADMIN_USER=your_username
+ADMIN_PASSWORD=your_strong_password
+SECRET_KEY=long-random-text
+```
+Generate a key with `python -c "import secrets; print(secrets.token_hex(32))"`.
+
+Do not expose Flask debug mode publicly.
 
 ## Pages
 - `/` — candidate screening form

@@ -1,4 +1,4 @@
-import os, re, json, sqlite3, datetime, secrets
+import os, re, json, sqlite3, datetime, secrets, hmac, time
 from functools import wraps
 from io import BytesIO
 from flask import Flask, request, jsonify, render_template, g, session, redirect, url_for, flash, send_file
@@ -24,8 +24,27 @@ BUNDLED_RULES_PATH = os.path.join(BASE_DIR, "job_rules.json")  # shipped with th
 MAX_UPLOAD_MB = 4  # Vercel rejects request bodies above 4.5 MB
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+def load_env_file():
+    """Local development only: read KEY=VALUE lines from a .env file (which is git-ignored)."""
+    try:
+        with open(os.path.join(BASE_DIR, ".env"), encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    except OSError:
+        pass
+
+load_env_file()
+
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "change-this-secret-key-before-sharing")
+# No secret or password is stored in the code. They come from environment variables (Vercel settings or .env).
+# Without SECRET_KEY a random key is used, so nobody can forge a login cookie (but sessions reset on restart).
+app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = bool(os.environ.get("VERCEL"))
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 
@@ -346,6 +365,7 @@ def report():
     return send_file(buffer, as_attachment=True, download_name="resume_analysis_report.pdf", mimetype="application/pdf")
 
 @app.route("/candidates")
+@admin_required
 def list_candidates():
     rows = get_db().execute("SELECT id,role,resume_filename,location,years_experience,degree_years,result,skills,created_at FROM candidates ORDER BY id DESC").fetchall()
     return jsonify([dict(row) for row in rows])
@@ -353,13 +373,20 @@ def list_candidates():
 @app.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
     if request.method == "POST":
-        expected_user = os.environ.get("ADMIN_USER", "admin")
-        expected_password = os.environ.get("ADMIN_PASSWORD", "change-me")
-        user = request.form.get("username", "")
-        password = request.form.get("password", "")
-        if secrets.compare_digest(user, expected_user) and secrets.compare_digest(password, expected_password):
+        expected_user = os.environ.get("ADMIN_USER", "")
+        expected_password = os.environ.get("ADMIN_PASSWORD", "")
+        if not expected_user or not expected_password:
+            flash("Admin login is not set up. The site owner must set ADMIN_USER and ADMIN_PASSWORD.", "error")
+            return render_template("login.html")
+        user = request.form.get("username", "").encode()
+        password = request.form.get("password", "").encode()
+        user_ok = hmac.compare_digest(user, expected_user.encode())
+        password_ok = hmac.compare_digest(password, expected_password.encode())
+        if user_ok and password_ok:
+            session.clear()
             session["admin_logged_in"] = True
             return redirect(url_for("dashboard"))
+        time.sleep(1)  # slows down password guessing
         flash("Login details are incorrect.", "error")
     return render_template("login.html")
 

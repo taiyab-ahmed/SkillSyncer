@@ -1,1 +1,25 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HR Admin Login</title><link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}"></head><body><main class="admin-page"><section class="admin-card"><p class="scanner__eyebrow">Restricted access</p><h1>HR Admin Login</h1>{% with messages = get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}<form method="post"><label class="field">Username<input name="username" required placeholder="admin"></label><label class="field">Password<input type="password" name="password" required></label><button class="btn">Sign in</button></form><p class="privacy-note">Demo login: admin / change-me. Set ADMIN_USER and ADMIN_PASSWORD before sharing this app.</p><a href="{{ url_for('index') }}">← Back to analyzer</a></section></main></body></html>
+<!doctype html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>HR Admin Login</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+
+<body>
+    <main class="admin-page">
+        <section class="admin-card">
+            <p class="scanner__eyebrow">Restricted access</p>
+            <h1>HR Admin Login</h1>{% with messages = get_flashed_messages(with_categories=true) %}{% for
+            category,message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}{% endwith
+            %}<form method="post"><label class="field">Username<input name="username" required
+                        autocomplete="username"></label><label class="field">Password<input type="password"
+                        name="password" autocomplete="current-password" required></label><button class="btn">Sign
+                    in</button></form><a href="{{ url_for('index') }}">← Back to analyzer</a>
+        </section>
+    </main>
+</body>
+
+</html>
