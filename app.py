@@ -1,9 +1,20 @@
-import os, re, json, sqlite3, datetime, secrets, hmac, time
+import os, re, json, sqlite3, datetime, secrets, hmac, time, textwrap
 from functools import wraps
 from io import BytesIO
 from flask import Flask, request, jsonify, render_template, g, session, redirect, url_for, flash, send_file
 from werkzeug.utils import secure_filename
+from analysis import SECTION_GROUPS, PHONE_PATTERNS, analyze_resume
 
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+except ImportError:
+    psycopg = None
+try:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+except ImportError:
+    Workbook = None
 try:
     import pypdf
 except ImportError:
@@ -25,18 +36,27 @@ MAX_UPLOAD_MB = 4  # Vercel rejects request bodies above 4.5 MB
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def load_env_file():
-    """Local development only: read KEY=VALUE lines from a .env file (which is git-ignored)."""
+    """Local development only: read KEY=VALUE lines from a .env file (which is git-ignored).
+    Works with files saved by Notepad or PowerShell (UTF-8 with BOM, UTF-16, CRLF line endings)."""
     try:
-        with open(os.path.join(BASE_DIR, ".env"), encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, value = line.split("=", 1)
-                    os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        with open(os.path.join(BASE_DIR, ".env"), "rb") as f:
+            raw = f.read()
     except OSError:
-        pass
+        return
+    text = raw.decode("utf-16") if raw.startswith((b"\xff\xfe", b"\xfe\xff")) else raw.decode("utf-8-sig", errors="replace")
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            key, value = key.strip(), value.strip().strip('"').strip("'")
+            if key and not os.environ.get(key):
+                os.environ[key] = value
 
 load_env_file()
+
+# With DATABASE_URL (Neon/Postgres) data is permanent. Without it, a local SQLite file is used.
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+USE_PG = bool(DATABASE_URL)
 
 app = Flask(__name__)
 # No secret or password is stored in the code. They come from environment variables (Vercel settings or .env).
@@ -71,6 +91,14 @@ DEFAULT_RULES = {
 }
 
 def load_rules():
+    if USE_PG:
+        try:
+            row = get_db().execute("SELECT value FROM settings WHERE key = %s", ("job_rules",)).fetchone()
+            rules = json.loads(row["value"]) if row else None
+            if isinstance(rules, dict) and rules:
+                return rules
+        except Exception:
+            get_db().rollback()
     for path in (RULES_PATH, BUNDLED_RULES_PATH):
         try:
             with open(path, encoding="utf-8") as f:
@@ -99,16 +127,39 @@ def parse_rules_form(form):
             raise ValueError(f"{name}: experience must be 0-60 and degree years 0-6.")
         rules[name] = {"min_years_experience": exp, "required_skills": split_list(form.get(f"skills_{i}", "")),
                        "require_bachelor_degree": bool(form.get(f"degree_{i}")), "min_degree_years": yrs,
-                       "allowed_locations": split_list(form.get(f"loc_{i}", ""))}
+                       "allowed_locations": split_list(form.get(f"loc_{i}", "")),
+                       "job_description": form.get(f"jd_{i}", "").strip()[:5000]}
     if not rules:
         raise ValueError("Keep at least one job role.")
     return rules
 
+def connect_db():
+    if USE_PG:
+        if psycopg is None:
+            raise RuntimeError("psycopg is missing. Run: python -m pip install -r requirements.txt")
+        return psycopg.connect(DATABASE_URL, row_factory=dict_row, prepare_threshold=None)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def sql(query):
+    """Queries are written with ? placeholders; Postgres wants %s."""
+    return query.replace("?", "%s") if USE_PG else query
+
 def get_db():
     if "db" not in g:
-        g.db = sqlite3.connect(DB_PATH)
-        g.db.row_factory = sqlite3.Row
+        g.db = connect_db()
     return g.db
+
+def save_rules(rules):
+    if USE_PG:
+        db = get_db()
+        db.execute("INSERT INTO settings (key, value) VALUES (%s, %s) "
+                   "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", ("job_rules", json.dumps(rules)))
+        db.commit()
+    else:
+        with open(RULES_PATH, "w", encoding="utf-8") as f:
+            json.dump(rules, f, indent=2)
 
 @app.teardown_appcontext
 def close_db(exception=None):
@@ -124,7 +175,25 @@ NEW_SCHEMA = """CREATE TABLE IF NOT EXISTS candidates (
 KEEP_COLUMNS = ["resume_filename", "location", "years_experience", "has_bachelor_degree", "degree_years",
                 "is_python_developer", "result", "reasons", "created_at", "salary", "notice", "skills", "role"]
 
+PG_SCHEMA = ["""CREATE TABLE IF NOT EXISTS candidates (
+    id SERIAL PRIMARY KEY, resume_filename TEXT, location TEXT,
+    years_experience DOUBLE PRECISION, has_bachelor_degree INTEGER, degree_years INTEGER,
+    is_python_developer INTEGER, result TEXT, reasons TEXT, created_at TEXT,
+    salary TEXT DEFAULT '', notice TEXT DEFAULT '', skills TEXT DEFAULT '', role TEXT DEFAULT '')""",
+    "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)"]
+
+NEW_COLUMNS = [("ats_score", "INTEGER"), ("match_score", "INTEGER"), ("status", "TEXT DEFAULT 'New'"), ("details", "TEXT DEFAULT ''")]
+
 def init_db():
+    if USE_PG:
+        conn = connect_db()
+        for statement in PG_SCHEMA:
+            conn.execute(statement)
+        for col, kind in NEW_COLUMNS:
+            conn.execute(f"ALTER TABLE candidates ADD COLUMN IF NOT EXISTS {col} {kind}")
+        conn.commit()
+        conn.close()
+        return
     conn = sqlite3.connect(DB_PATH)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(candidates)")}
     if "email" in cols:  # older version stored name/email/mobile; rebuild the table without them
@@ -137,6 +206,10 @@ def init_db():
         conn.execute(NEW_SCHEMA)
     if "role" not in {r[1] for r in conn.execute("PRAGMA table_info(candidates)")}:
         conn.execute("ALTER TABLE candidates ADD COLUMN role TEXT DEFAULT ''")
+    have = {r[1] for r in conn.execute("PRAGMA table_info(candidates)")}
+    for col, kind in NEW_COLUMNS:
+        if col not in have:
+            conn.execute(f"ALTER TABLE candidates ADD COLUMN {col} {kind}")
     conn.commit()
     conn.close()
 
@@ -185,22 +258,11 @@ def extract_resume_data(filepath):
             "has_bachelor_degree": has_bachelor, "degree_years": degree_years,
             "skills": skills}
 
-SECTION_GROUPS = {
-    "education": r"education|qualifications?|academics?",
-    "experience": r"experience|employment|internships?|work history",
-    "skills": r"skills|technical skills|core competencies",
-    "projects": r"projects?",
-    "summary": r"summary|objective|profile|about me",
-    "certifications": r"certifications?|achievements|awards",
-}
 OTHER_DOCUMENT_HINTS = [  # phrases that show up in job posts, invoices, papers, books etc., not in resumes
     "job description", "we are looking for", "about the company", "about us", "how to apply", "apply now",
     "invoice", "bill to", "purchase order", "terms and conditions", "table of contents", "abstract",
     "this certificate is awarded", "certificate of completion", "dear sir", "glossary",
 ]
-PHONE_PATTERNS = [r"(?<!\d)\d{10}(?!\d)", r"(?<!\d)\d{5}[\s-]\d{5}(?!\d)", r"\+\d{1,3}[\s-]?\d{4,5}[\s-]?\d{4,6}",
-                  r"\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}"]
-
 def resume_check(text):
     """Returns (is_resume, reason). Every rule must pass, so non-resume PDFs are rejected."""
     words = len(text.split())
@@ -261,20 +323,27 @@ def match_criteria(profile, resume_text, rules):
         reasons.append("All rules for this job role were satisfied.")
     return passed, reasons, checks
 
-def build_output(fields, resume_name, saved_name, profile, extracted, passed, reasons, checks):
+def build_output(fields, resume_name, saved_name, profile, extracted, passed, reasons, checks, analysis):
     result = "MATCHING" if passed else "NOT MATCHING"
+    out = {"result": result, "role": fields["role"], "resume": resume_name, "location": profile["location"],
+           "checks": checks, "skills": extracted["skills"], "reasons": reasons, **analysis}
     db = get_db()
-    db.execute("""INSERT INTO candidates
+    query = sql("""INSERT INTO candidates
         (resume_filename,location,years_experience,has_bachelor_degree,degree_years,
-         is_python_developer,result,reasons,created_at,salary,notice,skills,role)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (saved_name, profile["location"], profile["years_experience"], int(profile["has_bachelor_degree"]),
-         profile["degree_years"], int(extracted["is_python_developer"]), result, json.dumps(reasons),
-         datetime.datetime.now().isoformat(timespec="minutes"), fields["salary"], fields["notice"],
-         ", ".join(extracted["skills"]), fields["role"]))
+         is_python_developer,result,reasons,created_at,salary,notice,skills,role,
+         ats_score,match_score,status,details)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""")
+    params = (saved_name, profile["location"], profile["years_experience"], int(profile["has_bachelor_degree"]),
+              profile["degree_years"], int(extracted["is_python_developer"]), result, json.dumps(reasons),
+              datetime.datetime.now().isoformat(timespec="minutes"), fields["salary"], fields["notice"],
+              ", ".join(extracted["skills"]), fields["role"], analysis["ats"]["score"], analysis["match_score"],
+              "New", json.dumps(out))
+    if USE_PG:
+        out["id"] = db.execute(query + " RETURNING id", params).fetchone()["id"]
+    else:
+        out["id"] = db.execute(query, params).lastrowid
     db.commit()
-    return {"result": result, "role": fields["role"], "resume": resume_name, "location": profile["location"],
-            "checks": checks, "skills": extracted["skills"], "reasons": reasons}
+    return out
 
 def admin_required(fn):
     @wraps(fn)
@@ -290,7 +359,7 @@ def index():
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
-    f = {k: request.form.get(k, "").strip() for k in ["role", "experience", "degree", "location", "salary", "notice"]}
+    f = {k: request.form.get(k, "").strip() for k in ["role", "experience", "degree", "location", "salary", "notice", "jd"]}
     errors = []
     years = 0.0
     rules = load_rules()
@@ -331,43 +400,70 @@ def analyze():
         profile = {"years_experience": years, "has_bachelor_degree": degree_years > 0,
                    "degree_years": degree_years, "location": f["location"]}
         passed, reasons, checks = match_criteria(profile, extracted["raw_text"], rules[f["role"]])
-        output = build_output(f, filename, unique_name, profile, extracted, passed, reasons, checks)
-        session["last_report"] = output
+        jd_text = f["jd"][:5000] or rules[f["role"]].get("job_description", "")
+        analysis = analyze_resume(extracted["raw_text"], f["role"], rules[f["role"]], jd_text, SKILL_LIST, extracted["skills"])
+        output = build_output(f, filename, unique_name, profile, extracted, passed, reasons, checks, analysis)
+        session["last_report_id"] = output["id"]
         return jsonify(output)
     except Exception as exc:
         return jsonify({"error": True, "messages": [f"Could not read PDF: {exc}"]}), 400
 
-@app.route("/report")
-def report():
-    data = session.get("last_report")
-    if not data:
-        flash("Analyze a resume first to create a report.", "error")
-        return redirect(url_for("index"))
-    if canvas is None:
-        return "PDF report dependency missing. Run pip install -r requirements.txt", 500
+def candidate_details(cid):
+    row = get_db().execute(sql("SELECT details FROM candidates WHERE id = ?"), (cid,)).fetchone()
+    return json.loads(row["details"]) if row and row["details"] else None
+
+def report_pdf(data):
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
-    y = height - 55
+    state = {"y": height - 55}
     pdf.setTitle("Resume Analyzer Report")
-    pdf.setFont("Helvetica-Bold", 18); pdf.drawString(48, y, "Resume Analyzer Report"); y -= 35
-    pdf.setFont("Helvetica", 11)
-    lines = [f"Resume: {data['resume']}", f"Job role: {data['role']}", f"Screening result: {data['result']}", "", "Checks:"]
-    lines += [f"  [{'PASS' if c['ok'] else 'FAIL'}] {c['label']}: {c['detail']}" for c in data["checks"]]
-    lines += ["", "Skills found: " + (", ".join(data["skills"]) or "None"), "", "Screening notes:"]
-    lines += ["- " + item for item in data["reasons"]]
-    lines += ["", "Note: This is an automated screening aid, not a hiring decision."]
-    for line in lines:
-        if y < 55:
-            pdf.showPage(); y = height - 55; pdf.setFont("Helvetica", 11)
-        pdf.drawString(48, y, line[:115]); y -= 20
+    def line(text, font="Helvetica", size=10, gap=15):
+        pdf.setFont(font, size)
+        for part in textwrap.wrap(text, 95) or [""]:
+            if state["y"] < 55:
+                pdf.showPage(); state["y"] = height - 55; pdf.setFont(font, size)
+            pdf.drawString(48, state["y"], part); state["y"] -= gap
+    line("Resume Analyzer Report", "Helvetica-Bold", 18, 30)
+    line(f"Resume: {data['resume']}"); line(f"Job role: {data['role']}"); line(f"Screening result: {data['result']}")
+    line(f"ATS score: {data['ats']['score']}/100"); ms = data.get("match_score")
+    line("Job match: " + (f"{ms}%" if ms is not None else "n/a") + ("  (job description used)" if data.get("jd_used") else "")); line("")
+    line("Rule checks", "Helvetica-Bold", 12)
+    for c in data["checks"]:
+        line(f"  [{'PASS' if c['ok'] else 'FAIL'}] {c['label']}: {c['detail']}")
+    line(""); line("ATS score breakdown", "Helvetica-Bold", 12)
+    for i in data["ats"]["items"]:
+        line(f"  {i['label']}: {i['points']}/{i['max']} ({i['note']})")
+    line(""); line("Skill gap", "Helvetica-Bold", 12)
+    for g in data["gap"]:
+        line(f"  {g['status'].upper():8} {g['skill']}")
+    line(""); line("Improvement suggestions", "Helvetica-Bold", 12)
+    for t in data["suggestions"]:
+        line("  - " + t)
+    line(""); line("Interview questions", "Helvetica-Bold", 12)
+    for n, q in enumerate(data["questions"], 1):
+        line(f"  {n}. {q}")
+    line(""); line("Automated, rule-based screening aid. Not a hiring decision.", "Helvetica-Oblique", 9)
     pdf.save(); buffer.seek(0)
-    return send_file(buffer, as_attachment=True, download_name="resume_analysis_report.pdf", mimetype="application/pdf")
+    return buffer
+
+def send_report(data):
+    if canvas is None:
+        return "PDF report dependency missing. Run python -m pip install -r requirements.txt", 500
+    return send_file(report_pdf(data), as_attachment=True, download_name="resume_analysis_report.pdf", mimetype="application/pdf")
+
+@app.route("/report")
+def report():
+    data = candidate_details(session["last_report_id"]) if session.get("last_report_id") else None
+    if not data:
+        flash("Analyze a resume first to create a report.", "error")
+        return redirect(url_for("index"))
+    return send_report(data)
 
 @app.route("/candidates")
 @admin_required
 def list_candidates():
-    rows = get_db().execute("SELECT id,role,resume_filename,location,years_experience,degree_years,result,skills,created_at FROM candidates ORDER BY id DESC").fetchall()
+    rows = get_db().execute("SELECT id,role,resume_filename,location,years_experience,degree_years,result,skills,created_at,ats_score,match_score,status FROM candidates ORDER BY id DESC").fetchall()
     return jsonify([dict(row) for row in rows])
 
 @app.route("/admin/login", methods=["GET", "POST"])
@@ -395,20 +491,113 @@ def admin_logout():
     session.clear()
     return redirect(url_for("index"))
 
+STATUSES = ["New", "Shortlisted", "Interview", "Rejected"]
+COLS = "id,role,resume_filename,location,years_experience,degree_years,result,skills,created_at,salary,notice,ats_score,match_score,status"
+
+def fetch_rows(q="", role="", status="", sort="date"):
+    rows = []
+    for r in get_db().execute(f"SELECT {COLS} FROM candidates ORDER BY id DESC").fetchall():
+        r = dict(r)
+        r["file"] = re.sub(r"^\d{14}_[0-9a-f]{6}_", "", r["resume_filename"] or "")
+        r["status"] = r["status"] or "New"
+        if q and q not in r["file"].lower() and q not in (r["location"] or "").lower():
+            continue
+        if (role and r["role"] != role) or (status and r["status"] != status):
+            continue
+        rows.append(r)
+    if sort == "ats":
+        rows.sort(key=lambda r: -(r["ats_score"] or 0))
+    elif sort == "match":
+        rows.sort(key=lambda r: -(r["match_score"] if r["match_score"] is not None else -1))
+    return rows
+
+def filters_from_request():
+    return (request.args.get("q", "").strip().lower(), request.args.get("role", ""),
+            request.args.get("status", ""), request.args.get("sort", "date"))
+
 @app.route("/admin")
 @admin_required
 def dashboard():
-    q = request.args.get("q", "").strip().lower()
-    role = request.args.get("role", "")
-    rows = []
-    for r in get_db().execute("SELECT * FROM candidates ORDER BY id DESC").fetchall():
-        r = dict(r)
-        r["file"] = re.sub(r"^\d{14}_[0-9a-f]{6}_", "", r["resume_filename"] or "")
-        if (not q or q in r["file"].lower() or q in (r["location"] or "").lower()) and (not role or r["role"] == role):
-            rows.append(r)
+    rows = fetch_rows(*filters_from_request())
     matched = sum(1 for r in rows if r["result"] == "MATCHING")
-    return render_template("dashboard.html", rows=rows, roles=list(load_rules()), total=len(rows),
-                           matched=matched, not_matched=len(rows) - matched)
+    return render_template("dashboard.html", rows=rows, roles=list(load_rules()), statuses=STATUSES, total=len(rows),
+                           matched=matched, not_matched=len(rows) - matched,
+                           shortlisted=sum(1 for r in rows if r["status"] == "Shortlisted"))
+
+@app.route("/admin/status/<int:cid>", methods=["POST"])
+@admin_required
+def set_status(cid):
+    status = request.form.get("status", "")
+    if status in STATUSES:
+        db = get_db()
+        db.execute(sql("UPDATE candidates SET status = ? WHERE id = ?"), (status, cid))
+        db.commit()
+    return redirect(url_for("dashboard"))
+
+@app.route("/admin/delete/<int:cid>", methods=["POST"])
+@admin_required
+def delete_candidate(cid):
+    db = get_db()
+    db.execute(sql("DELETE FROM candidates WHERE id = ?"), (cid,))
+    db.commit()
+    flash("Candidate deleted.", "success")
+    return redirect(url_for("dashboard"))
+
+@app.route("/admin/report/<int:cid>")
+@admin_required
+def admin_report(cid):
+    data = candidate_details(cid)
+    if not data:
+        flash("No detailed report is stored for this candidate (analyzed before this feature was added).", "error")
+        return redirect(url_for("dashboard"))
+    return send_report(data)
+
+@app.route("/admin/compare")
+@admin_required
+def compare():
+    ids = [int(i) for i in request.args.getlist("ids") if i.isdigit()][:3]
+    if len(ids) < 2:
+        flash("Tick 2 or 3 candidates to compare.", "error")
+        return redirect(url_for("dashboard"))
+    people = []
+    for cid in ids:
+        row = get_db().execute(sql(f"SELECT {COLS},details FROM candidates WHERE id = ?"), (cid,)).fetchone()
+        if row:
+            r = dict(row)
+            r["file"] = re.sub(r"^\d{14}_[0-9a-f]{6}_", "", r["resume_filename"] or "")
+            r["status"] = r["status"] or "New"
+            r["data"] = json.loads(r["details"]) if r["details"] else {}
+            people.append(r)
+    return render_template("compare.html", people=people)
+
+def safe_cell(value):
+    """Stop spreadsheet formula injection: text starting with = + - @ would be run as a formula in Excel."""
+    return "'" + value if isinstance(value, str) and value[:1] in ("=", "+", "-", "@") else value
+
+@app.route("/admin/export.xlsx")
+@admin_required
+def export_excel():
+    if Workbook is None:
+        return "Excel export needs openpyxl. Run python -m pip install -r requirements.txt", 500
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Candidates"
+    headers = ["ID", "Date", "Job role", "Resume", "Location", "Experience (yrs)", "Degree (yrs)", "Result",
+               "ATS score", "Job match %", "Status", "Skills", "Expected salary", "Notice period"]
+    ws.append(headers)
+    for r in fetch_rows(*filters_from_request()):
+        ws.append([safe_cell(v) for v in [r["id"], r["created_at"], r["role"], r["file"], r["location"], r["years_experience"],
+                   r["degree_years"], r["result"], r["ats_score"], r["match_score"], r["status"], r["skills"], r["salary"], r["notice"]]])
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    ws.freeze_panes = "A2"
+    for col, width in zip("ABCDEFGHIJKLMN", [6, 17, 22, 32, 14, 12, 12, 14, 10, 11, 12, 40, 14, 14]):
+        ws.column_dimensions[col].width = width
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name="candidates.xlsx",
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 @app.route("/admin/rules", methods=["GET", "POST"])
 @admin_required
@@ -416,8 +605,7 @@ def edit_rules():
     if request.method == "POST":
         try:
             rules = parse_rules_form(request.form)
-            with open(RULES_PATH, "w", encoding="utf-8") as f:
-                json.dump(rules, f, indent=2)
+            save_rules(rules)
             flash("Job rules saved.", "success")
             return redirect(url_for("edit_rules"))
         except ValueError as exc:
@@ -464,7 +652,10 @@ def bulk_screen():
 def too_large(error):
     return jsonify({"error": True, "messages": [f"Upload exceeds the {MAX_UPLOAD_MB} MB limit."]}), 413
 
-init_db()  # also runs on Vercel, where the app is imported instead of started
+try:
+    init_db()  # also runs on Vercel, where the app is imported instead of started
+except Exception as exc:  # keep the site up; pages that need the database will show an error
+    print("Database setup failed:", exc)
 
 if __name__ == "__main__":
     app.run(debug=True, host="127.0.0.1", port=5000)

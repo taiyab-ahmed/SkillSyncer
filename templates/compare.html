@@ -1,0 +1,17 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Compare candidates</title><link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}"></head>
+<body><main class="admin-page wide">
+<header class="admin-header"><div><p class="scanner__eyebrow">HR workspace</p><h1>Compare candidates</h1></div><nav><a href="{{ url_for('dashboard') }}">Back to dashboard</a></nav></header>
+<section class="admin-card"><div class="table-scroll"><table class="compare"><tbody>
+<tr><td>Resume</td>{% for p in people %}<td><strong>{{ p.file }}</strong></td>{% endfor %}</tr>
+<tr><td>Job role</td>{% for p in people %}<td>{{ p.role or '—' }}</td>{% endfor %}</tr>
+<tr><td>Result</td>{% for p in people %}<td><span class="pill {{ 'pass' if p.result == 'MATCHING' else 'fail' }}">{{ p.result }}</span></td>{% endfor %}</tr>
+<tr><td>ATS score</td>{% for p in people %}<td>{{ p.ats_score if p.ats_score is not none else '—' }}{% if p.ats_score is not none %}/100{% endif %}</td>{% endfor %}</tr>
+<tr><td>Job match</td>{% for p in people %}<td>{{ (p.match_score|string + '%') if p.match_score is not none else '—' }}</td>{% endfor %}</tr>
+<tr><td>Experience</td>{% for p in people %}<td>{{ '%g'|format(p.years_experience or 0) }} years</td>{% endfor %}</tr>
+<tr><td>Degree</td>{% for p in people %}<td>{{ (p.degree_years|string + '-year') if p.degree_years else 'None' }}</td>{% endfor %}</tr>
+<tr><td>Location</td>{% for p in people %}<td>{{ p.location }}</td>{% endfor %}</tr>
+<tr><td>Status</td>{% for p in people %}<td>{{ p.status }}</td>{% endfor %}</tr>
+<tr><td>Skills found</td>{% for p in people %}<td>{{ p.skills or '—' }}</td>{% endfor %}</tr>
+<tr><td>Skill gap</td>{% for p in people %}<td>{% for g in p.data.get('gap', []) %}<span class="chip gap gap--{{ g.status }}">{{ {'found':'✓','partial':'~','missing':'✕'}[g.status] }} {{ g.skill }}</span> {% else %}—{% endfor %}</td>{% endfor %}</tr>
+<tr><td>Top suggestions</td>{% for p in people %}<td>{% for t in p.data.get('suggestions', [])[:3] %}{{ loop.index }}. {{ t }}<br>{% else %}—{% endfor %}</td>{% endfor %}</tr>
+</tbody></table></div></section></main></body></html>

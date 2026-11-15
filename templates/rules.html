@@ -11,6 +11,7 @@
 <label class="field"><span class="field__label">Degree duration needed (years)</span><input type="number" min="0" max="6" name="degyears_{{ i }}" value="{{ r.get('min_degree_years', 0) }}"></label></div>
 <label class="field"><span class="field__label">Required skills <i>(must appear in the resume)</i></span><input name="skills_{{ i }}" value="{{ r.get('required_skills', [])|join(', ') }}"></label>
 <label class="field"><span class="field__label">Allowed locations <i>(empty = any)</i></span><input name="loc_{{ i }}" value="{{ r.get('allowed_locations', [])|join(', ') }}"></label>
+<label class="field"><span class="field__label">Job description <i>(optional, used for the skill gap and job match)</i></span><textarea name="jd_{{ i }}" rows="3" maxlength="5000">{{ r.get('job_description', '') }}</textarea></label>
 <label class="check-inline"><input type="checkbox" name="degree_{{ i }}" {% if r.get('require_bachelor_degree') %}checked{% endif %}> Bachelor's degree required</label>
 <label class="check-inline"><input type="checkbox" name="del_{{ i }}"> Delete this role</label></fieldset>{% endfor %}
 {% set n = rules|length %}
@@ -20,5 +21,6 @@
 <label class="field"><span class="field__label">Degree duration needed (years)</span><input type="number" min="0" max="6" name="degyears_{{ n }}" value="3"></label></div>
 <label class="field"><span class="field__label">Required skills</span><input name="skills_{{ n }}" placeholder="e.g. docker, linux"></label>
 <label class="field"><span class="field__label">Allowed locations <i>(empty = any)</i></span><input name="loc_{{ n }}"></label>
+<label class="field"><span class="field__label">Job description <i>(optional)</i></span><textarea name="jd_{{ n }}" rows="3" maxlength="5000"></textarea></label>
 <label class="check-inline"><input type="checkbox" name="degree_{{ n }}" checked> Bachelor's degree required</label></fieldset>
 <button class="btn">Save job rules</button></form></main></body></html>

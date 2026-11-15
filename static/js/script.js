@@ -29,6 +29,15 @@ function checkRow(c) {
   li.append(mark, text);
   return li;
 }
+function fillList(id, items) {
+  const el = $(id);
+  el.innerHTML = "";
+  items.forEach(t => { const li = document.createElement("li"); li.textContent = t; el.appendChild(li); });
+}
+function setMeter(valueId, barId, value, suffix) {
+  $(valueId).textContent = value === null || value === undefined ? "n/a" : value + suffix;
+  $(barId).style.width = (value || 0) + "%";
+}
 function renderResult(data) {
   const pass = data.result === "MATCHING";
   $("result-band").className = "result__band " + (pass ? "pass" : "fail");
@@ -37,6 +46,19 @@ function renderResult(data) {
   const list = $("result-checklist");
   list.innerHTML = "";
   data.checks.forEach(c => list.appendChild(checkRow(c)));
+  setMeter("ats-value", "ats-bar", data.ats.score, "/100");
+  setMeter("match-value", "match-bar", data.match_score, "%");
+  const gapBox = $("skill-gap");
+  gapBox.innerHTML = "";
+  if (!data.gap.length) { gapBox.textContent = "No target skills for this role."; gapBox.className = "chips muted"; }
+  else {
+    gapBox.className = "chips";
+    const marks = {found: "✓ ", partial: "~ ", missing: "✕ "};
+    data.gap.forEach(g => { const el = document.createElement("span"); el.className = "chip gap gap--" + g.status; el.textContent = marks[g.status] + g.skill; gapBox.appendChild(el); });
+  }
+  fillList("ats-items", data.ats.items.map(i => `${i.label}: ${i.points}/${i.max} (${i.note})`));
+  fillList("suggestions", data.suggestions);
+  fillList("questions", data.questions);
   const chips = $("extracted-skills");
   chips.innerHTML = "";
   if (!data.skills.length) { chips.textContent = "None detected"; chips.className = "chips muted"; }

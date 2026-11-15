@@ -20,6 +20,7 @@
     <label class="field"><span class="field__label">Expected salary <i>(optional)</i></span><input name="salary" placeholder="e.g. 5 LPA"></label>
     <label class="field"><span class="field__label">Notice period <i>(optional)</i></span><select name="notice"><option value="">Select</option><option>Immediate</option><option>15 days</option><option>30 days</option><option>60 days</option><option>90 days</option></select></label>
   </div>
+  <label class="field"><span class="field__label">Job description <i>(optional, overrides the one saved for the role)</i></span><textarea name="jd" rows="4" maxlength="5000" placeholder="Paste the job description to check the resume against it"></textarea></label>
   <label class="field field--file" id="drop-zone"><strong>Drop the resume PDF here or click to browse</strong><input type="file" name="resume" id="resume" accept=".pdf,application/pdf" required><span class="field__filename" id="file-name">No file chosen · PDF, max 4 MB</span></label>
   <button type="submit" class="btn" id="submit-btn">Analyze resume</button>
   <p class="privacy-note">Screening is automated and is not a hiring decision.</p>
@@ -31,6 +32,14 @@
   <div class="result" id="result" hidden>
     <div class="result__band" id="result-band"><span class="result__status" id="result-status"></span><span class="result__sub" id="result-sub"></span></div>
     <ul class="result__checklist" id="result-checklist"></ul>
+    <div class="scores">
+      <div class="meter"><span class="meter__label">ATS score</span><strong id="ats-value"></strong><div class="meter__bar"><span id="ats-bar"></span></div></div>
+      <div class="meter"><span class="meter__label">Job match</span><strong id="match-value"></strong><div class="meter__bar"><span id="match-bar"></span></div></div>
+    </div>
+    <div class="skills-block"><h3>Skill gap</h3><div id="skill-gap" class="chips"></div></div>
+    <details class="more"><summary>ATS score breakdown</summary><ul id="ats-items" class="plain"></ul></details>
+    <details class="more"><summary>Resume improvement suggestions</summary><ul id="suggestions" class="plain"></ul></details>
+    <details class="more"><summary>Interview questions</summary><ol id="questions" class="plain"></ol></details>
     <div class="skills-block"><h3>Skills found in resume</h3><div id="extracted-skills" class="chips"></div></div>
     <div class="result__reasons" id="result-reasons"></div>
     <div class="result-actions"><a class="btn secondary-btn" href="{{ url_for('report') }}" target="_blank">Download PDF report</a><a class="utility-btn" href="{{ url_for('index') }}">New analysis</a></div>
